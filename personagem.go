@@ -10,10 +10,54 @@ func personagemMover(tecla rune, jogo *Jogo) {
 	case 'w': dy = -1 // Move para cima
 	case 'a': dx = -1 // Move para a esquerda
 	case 's': dy = 1  // Move para baixo
-	case 'd': dx = 1  // Move para a direita
+	case 'd': dx =1  // Move para a direita
 	}
 
 	nx, ny := jogo.PosX+dx, jogo.PosY+dy
+
+	// --- LÓGICA DE COLISÃO E INTERAÇÃO ---
+
+    // 1. Verifique se a nova posição está fora dos limites
+    if ny < 0 || ny >= len(jogo.Mapa) || nx < 0 || nx >= len(jogo.Mapa[ny]) {
+        return
+    }
+
+    // 2. Pegue o elemento na nova posição
+    elementoNaPosicao := jogo.Mapa[ny][nx]
+
+    // 3. Verifique a colisão com a armadilha
+    if elementoNaPosicao.simbolo == armadilha.Elemento.simbolo {
+        jogo.StatusMsg = "FIM DE JOGO! Você caiu na armadilha!"
+        go func() { armadilha.ProximidadeJogador <- true }()
+        // O loop principal deve quebrar. Uma forma de fazer isso é mover
+        // a lógica de retorno para a função que chama personagemMover.
+        // Já que você está chamando essa função de dentro de personagemExecutarAcao,
+        // a lógica de retorno `false` deve estar lá.
+        return 
+    }
+
+    // 4. Verifique a colisão com o portal
+    if elementoNaPosicao.simbolo == portal.Elemento.simbolo {
+        jogo.StatusMsg = "Você entrou no portal e foi teletransportado!"
+        go func() { portal.Teletransportar <- true }()
+        // Implemente a lógica de teletransporte. Exemplo:
+        jogo.Mapa[jogo.PosY][jogo.PosX] = jogo.UltimoVisitado // Limpa a posição antiga
+        jogo.PosX, jogo.PosY = 1, 1 // Nova posição
+        jogo.UltimoVisitado = jogo.Mapa[jogo.PosY][jogo.PosX] // Salva o elemento da nova posição
+        jogo.Mapa[jogo.PosY][jogo.PosX] = Personagem // Coloca o personagem na nova posição
+        return
+    }
+    
+    // 5. Se o movimento for para um elemento tangível, não faça nada
+    if elementoNaPosicao.tangivel {
+        return
+    }
+
+    // 6. Se nenhuma das condições acima foi satisfeita, mova o personagem
+    jogoMoverElemento(jogo, jogo.PosX, jogo.PosY, dx, dy)
+    jogo.PosX, jogo.PosY = nx, ny
+
+	nx, ny = jogo.PosX+dx, jogo.PosY+dy
 	// Verifica se o movimento é permitido e realiza a movimentação
 	if jogoPodeMoverPara(jogo, nx, ny) {
 		jogoMoverElemento(jogo, jogo.PosX, jogo.PosY, dx, dy)

@@ -20,6 +20,9 @@ func main() {
 		panic(err)
 	}
 
+	// inicia o comportamento dos elementos 
+    iniciarElementos(&jogo)
+
 	// Desenha o estado inicial do jogo
 	interfaceDesenharJogo(&jogo)
 

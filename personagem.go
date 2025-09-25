@@ -1,90 +1,152 @@
-// personagem.go - Funções para movimentação e ações do personagem
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"math/rand"
+	"time"
+)
 
 // Atualiza a posição do personagem com base na tecla pressionada (WASD)
+func jogoMoverPersonagem(jogo *Jogo, dx, dy int) {
+	nx, ny := jogo.PosX+dx, jogo.PosY+dy
+	// restaura célula atual sob o jogador
+	jogo.Mapa[jogo.PosY][jogo.PosX] = jogo.UltimoVisitado
+	// captura o elemento sob o destino
+	jogo.UltimoVisitado = jogo.Mapa[ny][nx]
+	// atualiza posição do jogador
+	jogo.PosX, jogo.PosY = nx, ny
+}
+
+// Move o personagem conforme a tecla (WASD)
 func personagemMover(tecla rune, jogo *Jogo) {
+	// bloqueia movimento após Game Over
+	stop := false
+	withMapaLock(func() {
+		if jogo.GameOver {
+			stop = true
+		}
+	})
+	if stop {
+		return
+	}
+
 	dx, dy := 0, 0
 	switch tecla {
-	case 'w': dy = -1 // Move para cima
-	case 'a': dx = -1 // Move para a esquerda
-	case 's': dy = 1  // Move para baixo
-	case 'd': dx =1  // Move para a direita
+	case 'w', 'W':
+		dy = -1
+	case 'a', 'A':
+		dx = -1
+	case 's', 'S':
+		dy = 1
+	case 'd', 'D':
+		dx = 1
+	default:
+		return // ignora outras teclas
 	}
 
-	nx, ny := jogo.PosX+dx, jogo.PosY+dy
+	withMapaLock(func() {
+		nx, ny := jogo.PosX+dx, jogo.PosY+dy
+		// limites do mapa
+		if ny < 0 || ny >= len(jogo.Mapa) || nx < 0 || nx >= len(jogo.Mapa[ny]) {
+			return
+		}
 
-	// --- LÓGICA DE COLISÃO E INTERAÇÃO ---
+		elem := jogo.Mapa[ny][nx]
 
-    // 1. Verifique se a nova posição está fora dos limites
-    if ny < 0 || ny >= len(jogo.Mapa) || nx < 0 || nx >= len(jogo.Mapa[ny]) {
-        return
-    }
+		// Guarda: bloqueia
+		if elem.simbolo == guarda.Elemento.simbolo {
+			jogo.StatusMsg = "O guarda bloqueia o caminho!"
+			return
+		}
 
-    // 2. Pegue o elemento na nova posição
-    elementoNaPosicao := jogo.Mapa[ny][nx]
+		// Inimigo: bloqueia
+		if elem.simbolo == Inimigo.simbolo {
+			jogo.StatusMsg = "Um inimigo bloqueia o caminho!"
+			return
+		}
 
-    // 3. Verifique a colisão com a armadilha
-    if elementoNaPosicao.simbolo == armadilha.Elemento.simbolo {
-        jogo.StatusMsg = "FIM DE JOGO! Você caiu na armadilha!"
-        go func() { armadilha.ProximidadeJogador <- true }()
-        // O loop principal deve quebrar. Uma forma de fazer isso é mover
-        // a lógica de retorno para a função que chama personagemMover.
-        // Já que você está chamando essa função de dentro de personagemExecutarAcao,
-        // a lógica de retorno `false` deve estar lá.
-        return 
-    }
+		// Armadilha: marca Game Over e mostra mensagem normal (sem overlay)
+		if elem.simbolo == armadilha.Elemento.simbolo {
+			jogo.GameOver = true
+			jogo.StatusMsg = "GAME OVER — Pressione R para Reiniciar"
+			select {
+			case armadilha.ProximidadeJogador <- true:
+			default:
+			}
+			return
+		}
 
-    // 4. Verifique a colisão com o portal
-    if elementoNaPosicao.simbolo == portal.Elemento.simbolo {
-        jogo.StatusMsg = "Você entrou no portal e foi teletransportado!"
-        go func() { portal.Teletransportar <- true }()
-        // Implemente a lógica de teletransporte. Exemplo:
-        jogo.Mapa[jogo.PosY][jogo.PosX] = jogo.UltimoVisitado // Limpa a posição antiga
-        jogo.PosX, jogo.PosY = 1, 1 // Nova posição
-        jogo.UltimoVisitado = jogo.Mapa[jogo.PosY][jogo.PosX] // Salva o elemento da nova posição
-        jogo.Mapa[jogo.PosY][jogo.PosX] = Personagem // Coloca o personagem na nova posição
-        return
-    }
-    
-    // 5. Se o movimento for para um elemento tangível, não faça nada
-    if elementoNaPosicao.tangivel {
-        return
-    }
+		// Portal: teleporte aleatório para célula livre
+		if elem.simbolo == portal.Elemento.simbolo {
+			// notifica uso do portal (reinicia timeout)
+			select {
+			case portal.Teletransportar <- true:
+			default:
+			}
 
-    // 6. Se nenhuma das condições acima foi satisfeita, mova o personagem
-    jogoMoverElemento(jogo, jogo.PosX, jogo.PosY, dx, dy)
-    jogo.PosX, jogo.PosY = nx, ny
+			// coleta destinos livres (não tangíveis), exceto a própria célula atual
+			candidatos := make([][2]int, 0, 256)
+			for y := 0; y < len(jogo.Mapa); y++ {
+				for x := 0; x < len(jogo.Mapa[y]); x++ {
+					if !jogo.Mapa[y][x].tangivel && !(x == jogo.PosX && y == jogo.PosY) {
+						candidatos = append(candidatos, [2]int{x, y})
+					}
+				}
+			}
+			if len(candidatos) == 0 {
+				jogo.StatusMsg = "Portal falhou: sem destino livre."
+				return
+			}
 
-	nx, ny = jogo.PosX+dx, jogo.PosY+dy
-	// Verifica se o movimento é permitido e realiza a movimentação
-	if jogoPodeMoverPara(jogo, nx, ny) {
-		jogoMoverElemento(jogo, jogo.PosX, jogo.PosY, dx, dy)
-		jogo.PosX, jogo.PosY = nx, ny
-	}
+			rand.Seed(time.Now().UnixNano())
+			pick := candidatos[rand.Intn(len(candidatos))]
+			tx, ty := pick[0], pick[1]
+
+			// Teleporta: restaura célula atual, atualiza posição/UltimoVisitado
+			jogo.Mapa[jogo.PosY][jogo.PosX] = jogo.UltimoVisitado
+			jogo.PosX, jogo.PosY = tx, ty
+			jogo.UltimoVisitado = jogo.Mapa[jogo.PosY][jogo.PosX]
+
+			jogo.StatusMsg = fmt.Sprintf("Você entrou no portal e foi para (%d, %d).", tx, ty)
+			return
+		}
+
+		// Movimento normal se não for tangível
+		if elem.tangivel {
+			return
+		}
+		jogoMoverPersonagem(jogo, dx, dy)
+	})
 }
 
 // Define o que ocorre quando o jogador pressiona a tecla de interação
-// Neste exemplo, apenas exibe uma mensagem de status
-// Você pode expandir essa função para incluir lógica de interação com objetos
 func personagemInteragir(jogo *Jogo) {
-	// Atualmente apenas exibe uma mensagem de status
 	jogo.StatusMsg = fmt.Sprintf("Interagindo em (%d, %d)", jogo.PosX, jogo.PosY)
 }
 
 // Processa o evento do teclado e executa a ação correspondente
 func personagemExecutarAcao(ev EventoTeclado, jogo *Jogo) bool {
+	// Reiniciar com 'R' quando em Game Over
+	if ev.Tipo == "mover" && (ev.Tecla == 'r' || ev.Tecla == 'R') {
+		withMapaLock(func() {
+			if jogo.GameOver {
+				if err := jogoReiniciar(jogo); err != nil {
+					jogo.StatusMsg = "Falha ao reiniciar."
+				}
+			}
+		})
+		return true
+	}
+
 	switch ev.Tipo {
 	case "sair":
-		// Retorna false para indicar que o jogo deve terminar
 		return false
 	case "interagir":
-		// Executa a ação de interação
 		personagemInteragir(jogo)
 	case "mover":
-		// Move o personagem com base na tecla
 		personagemMover(ev.Tecla, jogo)
 	}
-	return true // Continua o jogo
+
+	// Mantém rodando mesmo em Game Over; espera 'R' ou 'ESC'
+	return true
 }
